@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Digital Twin 3D - Desktop</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #07090f; color: #00f3ff; font-family: 'Segoe UI', sans-serif; }
+    #hud {
+      position: absolute; top: 20px; left: 20px; z-index: 10;
+      background: rgba(10, 15, 28, 0.85); border: 1px solid #00f3ff;
+      padding: 20px; border-radius: 12px; backdrop-filter: blur(8px);
+      transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.8s;
+    }
+    #hud img { display: block; margin: 12px 0; border-radius: 8px; border: 2px solid #fff; }
+    .ui-explode {
+      transform: translate(-300px, 600px) rotate(-45deg) scale(0.5) !important;
+      opacity: 0 !important;
+    }
+    #status { font-weight: bold; color: #ff0055; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <div id="hud" class="hud-element">
+    <h2 style="margin:0 0 8px 0;">DIGITAL TWIN LINK</h2>
+    <div>Stato: <span id="status">In attesa del telefono...</span></div>
+    <img id="qr-img" alt="QR Code" />
+    <small id="qr-url"></small>
+  </div>
+
+  <script>
+    // 1. Carica il QR Code dal server
+    fetch('/qr').then(r => r.json()).then(data => {
+      document.getElementById('qr-img').src = data.qr;
+      document.getElementById('qr-url').textContent = data.url;
+    });
+
+    // 2. Setup Scena Three.js
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x07090f, 0.03);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 3.5, 7);
+    camera.lookAt(0, 0.5, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Griglia neon
+    const grid = new THREE.GridHelper(40, 40, 0x00f3ff, 0x112233);
+    scene.add(grid);
+
+    // Luci
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0x00f3ff, 1.5);
+    dirLight.position.set(5, 10, 7);
+    scene.add(dirLight);
+
+    // Costruzione Modello 3D Modulare (Auto Cyber-Twin composta da più parti per l'esplosione)
+    const carGroup = new THREE.Group();
+    const parts = [];
+
+    function createPart(geo, color, x, y, z) {
+      const mat = new THREE.MeshStandardMaterial({
+        color, emissive: color, emissiveIntensity: 0.25, roughness: 0.2, metalness: 0.8
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      mesh.userData.origPos = mesh.position.clone();
+      mesh.userData.origRot = mesh.rotation.clone();
+      mesh.userData.velocity = new THREE.Vector3();
+      mesh.userData.rotVel = new THREE.Vector3();
+      carGroup.add(mesh);
+      parts.push(mesh);
+      return mesh;
+    }
+
+    // Telaio, abitacolo, alettone e 4 ruote
+    createPart(new THREE.BoxGeometry(2.2, 0.5, 4.4), 0x00f3ff, 0, 0.6, 0);
+    createPart(new THREE.BoxGeometry(1.6, 0.5, 2.0), 0x0d1b2a, 0, 1.1, -0.2);
+    createPart(new THREE.BoxGeometry(2.2, 0.1, 0.5), 0xff0055, 0, 1.15, -2.0);
+    const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.35, 20);
+    wheelGeo.rotateZ(Math.PI / 2);
+    createPart(wheelGeo, 0xff0055, -1.2, 0.45, 1.3);
+    createPart(wheelGeo, 0xff0055,  1.2, 0.45, 1.3);
+    createPart(wheelGeo, 0xff0055, -1.2, 0.45, -1.3);
+    createPart(wheelGeo, 0xff0055,  1.2, 0.45, -1.3);
+
+    scene.add(carGroup);
+
+    // Variabili di controllo sensori
+    let targetRotX = 0, targetRotZ = 0;
+    let isExploded = false;
+
+    // 3. Connessione WebSocket
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = 'CONNESSO';
+      statusEl.style.color = '#00ff88';
+
+      if (msg.type === 'orientation' && !isExploded) {
+        // Mappa inclinazione telefono (beta/gamma) sulla rotazione 3D
+        targetRotX = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(msg.beta - 45, -45, 45));
+        targetRotZ = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(-msg.gamma, -60, 60));
+      } else if (msg.type === 'shake' && !isExploded) {
+        triggerExplosion();
+      }
+    };
+
+    function triggerExplosion() {
+      isExploded = true;
+      document.getElementById('hud').classList.add('ui-explode');
+
+      parts.forEach(p => {
+        p.userData.velocity.set(
+          (Math.random() - 0.5) * 0.4,
+          Math.random() * 0.35 + 0.1,
+          (Math.random() - 0.5) * 0.4
+        );
+        p.userData.rotVel.set(Math.random() * 0.2, Math.random() * 0.2, Math.random() * 0.2);
+      });
+
+      // Ricomposizione automatica dopo 3.5 secondi
+      setTimeout(() => {
+        isExploded = false;
+        document.getElementById('hud').classList.remove('ui-explode');
+        parts.forEach(p => {
+          p.position.copy(p.userData.origPos);
+          p.rotation.copy(p.userData.origRot);
+        });
+      }, 3500);
+    }
+
+    // 4. Loop di rendering
+    function animate() {
+      requestAnimationFrame(animate);
+      if (!isExploded) {
+        carGroup.rotation.x += (targetRotX - carGroup.rotation.x) * 0.15;
+        carGroup.rotation.z += (targetRotZ - carGroup.rotation.z) * 0.15;
+      } else {
+        parts.forEach(p => {
+          p.position.add(p.userData.velocity);
+          p.userData.velocity.y -= 0.012; // Gravità
+          p.rotation.x += p.userData.rotVel.x;
+          p.rotation.y += p.userData.rotVel.y;
+        });
+      }
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
