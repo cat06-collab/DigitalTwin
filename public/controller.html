@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Digital Twin Controller</title>
+  <style>
+    body {
+      margin: 0; height: 100vh; display: flex; flex-direction: column;
+      justify-content: center; align-items: center; background: #07090f;
+      color: #00f3ff; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px;
+    }
+    button {
+      background: #00f3ff; color: #07090f; border: none; padding: 20px 36px;
+      font-size: 1.2rem; font-weight: bold; border-radius: 50px; cursor: pointer;
+      box-shadow: 0 0 25px rgba(0, 243, 255, 0.5);
+    }
+    #telemetry { margin-top: 30px; font-family: monospace; font-size: 1rem; color: #8899aa; }
+  </style>
+</head>
+<body>
+  <h1>CONTROLLER FISICO</h1>
+  <p>Inclina il telefono per guidare.<br>Scuotilo forte per far esplodere il modello!</p>
+  <button id="start-btn">ATTIVA SENSORI</button>
+  <div id="telemetry">In attesa di attivazione...</div>
+
+  <script>
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    const telemetry = document.getElementById('telemetry');
+    let lastShakeTime = 0;
+
+    document.getElementById('start-btn').addEventListener('click', async () => {
+      // Richiesta permessi esplicita necessaria su iOS 13+
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const res = await DeviceOrientationEvent.requestPermission();
+        if (res !== 'granted') return alert('Permesso sensori negato.');
+      }
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        await DeviceMotionEvent.requestPermission();
+      }
+
+      document.getElementById('start-btn').style.display = 'none';
+      startSensors();
+    });
+
+    function startSensors() {
+      // 1. Giroscopio / Inclinazione
+      window.addEventListener('deviceorientation', (e) => {
+        if (ws.readyState === WebSocket.OPEN && e.beta !== null) {
+          ws.send(JSON.stringify({
+            type: 'orientation',
+            alpha: e.alpha,
+            beta: e.beta,
+            gamma: e.gamma
+          }));
+          telemetry.textContent = `Pitch: ${Math.round(e.beta)}° | Roll: ${Math.round(e.gamma)}°`;
+        }
+      });
+
+      // 2. Accelerometro / Rilevamento Shake (Scuotimento)
+      window.addEventListener('devicemotion', (e) => {
+        const acc = e.acceleration || e.accelerationIncludingGravity;
+        if (!acc) return;
+
+        const magnitude = Math.sqrt(acc.x * acc.x + acc.y * acc.y + acc.z * acc.z);
+        const now = Date.now();
+
+        if (magnitude > 25 && now - lastShakeTime > 1500) {
+          lastShakeTime = now;
+          if (navigator.vibrate) navigator.vibrate([100, 50, 200]); // Feedback aptico
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'shake', force: magnitude }));
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
